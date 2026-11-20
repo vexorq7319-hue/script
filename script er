@@ -1,0 +1,260 @@
+-- Big command bar (client-side). Type a command + Enter. Try: cmds
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local lp = Players.LocalPlayer
+
+local function char() return lp.Character end
+local function hum() local c = char(); return c and c:FindFirstChildOfClass("Humanoid") end
+local function root() local c = char(); return c and c:FindFirstChild("HumanoidRootPart") end
+
+local function findPlayer(name)
+    name = (name or ""):lower()
+    if name == "" then return nil end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower():sub(1, #name) == name or p.DisplayName:lower():sub(1, #name) == name then
+            return p
+        end
+    end
+end
+
+-- GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "CmdBar"
+gui.ResetOnSpawn = false
+local ok = pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+if not ok then gui.Parent = lp:WaitForChild("PlayerGui") end
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(0, 280, 0, 34)
+box.Position = UDim2.new(0.5, -140, 1, -80)
+box.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+box.TextColor3 = Color3.new(1, 1, 1)
+box.PlaceholderText = "command (try: cmds)"
+box.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+box.ClearTextOnFocus = true
+box.Font = Enum.Font.Code
+box.TextSize = 16
+box.Parent = gui
+Instance.new("UICorner", box)
+
+local toastLabel = Instance.new("TextLabel")
+toastLabel.Size = UDim2.new(0, 280, 0, 0)
+toastLabel.AutomaticSize = Enum.AutomaticSize.Y
+toastLabel.Position = UDim2.new(0.5, -140, 1, -82)
+toastLabel.AnchorPoint = Vector2.new(0, 1)
+toastLabel.BackgroundTransparency = 1
+toastLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+toastLabel.TextStrokeTransparency = 0.5
+toastLabel.TextWrapped = true
+toastLabel.Font = Enum.Font.Code
+toastLabel.TextSize = 14
+toastLabel.Text = ""
+toastLabel.Parent = gui
+
+local toastId = 0
+local function toast(msg)
+    toastId += 1
+    local id = toastId
+    toastLabel.Text = msg
+    task.delay(5, function() if id == toastId then toastLabel.Text = "" end end)
+end
+
+-- State
+local noclip, infjump = false, false
+local flying, flySpeed, bv, bg = false, 60, nil, nil
+local espOn, espObjs = false, {}
+local spinConn = nil
+
+RunService.Stepped:Connect(function()
+    if noclip and char() then
+        for _, p in ipairs(char():GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+end)
+
+UIS.JumpRequest:Connect(function()
+    if infjump and hum() then hum():ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+-- Fly
+local function stopFly()
+    flying = false
+    if bv then bv:Destroy() bv = nil end
+    if bg then bg:Destroy() bg = nil end
+    if hum() then hum().PlatformStand = false end
+end
+
+local function startFly()
+    local r = root()
+    if not r or not hum() then return end
+    stopFly()
+    bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    bv.Velocity = Vector3.zero
+    bv.Parent = r
+    bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    bg.P = 1e4
+    bg.Parent = r
+    hum().PlatformStand = true
+    flying = true
+end
+
+RunService.RenderStepped:Connect(function()
+    if flying and bv and bv.Parent and hum() then
+        local cam = workspace.CurrentCamera
+        local rel = cam.CFrame:VectorToObjectSpace(hum().MoveDirection)
+        local vel = cam.CFrame:VectorToWorldSpace(Vector3.new(rel.X, 0, rel.Z)) * flySpeed
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then vel += Vector3.new(0, flySpeed, 0) end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then vel -= Vector3.new(0, flySpeed, 0) end
+        bv.Velocity = vel
+        bg.CFrame = cam.CFrame
+    end
+end)
+
+-- ESP
+local function addEsp(p)
+    if p == lp or not p.Character then return end
+    if espObjs[p] then espObjs[p]:Destroy() end
+    local h = Instance.new("Highlight")
+    h.FillColor = Color3.fromRGB(255, 60, 60)
+    h.FillTransparency = 0.6
+    h.OutlineColor = Color3.new(1, 1, 1)
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = p.Character
+    espObjs[p] = h
+end
+
+local function clearEsp()
+    for _, h in pairs(espObjs) do h:Destroy() end
+    espObjs = {}
+end
+
+local function hookEsp(p)
+    p.CharacterAdded:Connect(function()
+        task.wait(1)
+        if espOn then addEsp(p) end
+    end)
+end
+for _, p in ipairs(Players:GetPlayers()) do hookEsp(p) end
+Players.PlayerAdded:Connect(hookEsp)
+
+-- Commands
+local commands = {}
+
+commands.speed = function(n) if hum() then hum().WalkSpeed = tonumber(n) or 16 end end
+commands.jump = function(n)
+    if hum() then hum().UseJumpPower = true hum().JumpPower = tonumber(n) or 50 end
+end
+commands.hipheight = function(n) if hum() then hum().HipHeight = tonumber(n) or 0 end end
+commands.gravity = function(n) workspace.Gravity = tonumber(n) or 196.2 end
+commands.fov = function(n) workspace.CurrentCamera.FieldOfView = tonumber(n) or 70 end
+commands.noclip = function() noclip = true toast("noclip on") end
+commands.clip = function() noclip = false toast("noclip off") end
+commands.infjump = function() infjump = true toast("infinite jump on") end
+commands.uninfjump = function() infjump = false toast("infinite jump off") end
+commands.fly = function(n) flySpeed = tonumber(n) or 60 startFly() toast("fly on (Space/Ctrl = up/down)") end
+commands.unfly = function() stopFly() toast("fly off") end
+commands.sit = function() if hum() then hum().Sit = true end end
+commands.reset = function() if hum() then hum().Health = 0 end end
+
+commands["goto"] = function(name)
+    local p = findPlayer(name)
+    local r, tr = root(), p and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+    if r and tr then r.CFrame = tr.CFrame * CFrame.new(0, 0, 3) else toast("player not found") end
+end
+
+commands.tp = function(x, y, z)
+    if root() and tonumber(x) and tonumber(y) and tonumber(z) then
+        root().CFrame = CFrame.new(tonumber(x), tonumber(y), tonumber(z))
+    end
+end
+
+commands.view = function(name)
+    local p = findPlayer(name)
+    local h = p and p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+    if h then workspace.CurrentCamera.CameraSubject = h else toast("player not found") end
+end
+commands.unview = function()
+    if hum() then workspace.CurrentCamera.CameraSubject = hum() end
+end
+
+commands.esp = function()
+    espOn = true
+    for _, p in ipairs(Players:GetPlayers()) do addEsp(p) end
+    toast("esp on")
+end
+commands.unesp = function() espOn = false clearEsp() toast("esp off") end
+
+commands.fullbright = function()
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 14
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 1e6
+    Lighting.Ambient = Color3.new(1, 1, 1)
+end
+
+commands.spin = function(n)
+    commands.unspin()
+    local s = tonumber(n) or 10
+    spinConn = RunService.Heartbeat:Connect(function()
+        if root() then root().CFrame *= CFrame.Angles(0, math.rad(s), 0) end
+    end)
+end
+commands.unspin = function() if spinConn then spinConn:Disconnect() spinConn = nil end end
+
+commands.lowgfx = function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end
+
+commands.antiafk = function()
+    lp.Idled:Connect(function()
+        local vu = game:GetService("VirtualUser")
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new())
+    end)
+    toast("anti-afk on")
+end
+
+commands.rejoin = function() TeleportService:Teleport(game.PlaceId, lp) end
+
+commands.players = function()
+    local t = {}
+    for _, p in ipairs(Players:GetPlayers()) do table.insert(t, p.Name) end
+    toast(table.concat(t, ", "))
+end
+
+commands.cmds = function()
+    local names = {}
+    for k in pairs(commands) do table.insert(names, k) end
+    table.sort(names)
+    toast(table.concat(names, ", "))
+end
+
+-- aliases
+commands.ws = commands.speed
+commands.jp = commands.jump
+commands.nc = commands.noclip
+commands.c = commands.clip
+commands.ij = commands.infjump
+commands.help = commands.cmds
+
+-- Run
+box.FocusLost:Connect(function(enter)
+    if not enter then return end
+    local args = box.Text:split(" ")
+    local name = (table.remove(args, 1) or ""):lower()
+    local fn = commands[name]
+    if fn then
+        local s, e = pcall(fn, table.unpack(args))
+        if not s then toast("error: " .. tostring(e)) end
+    elseif name ~= "" then
+        toast("unknown command: " .. name)
+    end
+    box.Text = ""
+end)
+
+toast("loaded. type cmds")
